@@ -31,6 +31,7 @@ def _settings_payload(settings: TaskSettings) -> Dict:
         "upscale_factor": settings.upscale_factor,
         "sharpen_sigma": settings.sharpen_sigma,
         "delete_original": settings.delete_original,
+        "backup_original": settings.backup_original,
         "batch_mode": settings.batch_mode.value,
         "batch_count": settings.batch_count,
         "batch_size_mb": settings.batch_size_mb,

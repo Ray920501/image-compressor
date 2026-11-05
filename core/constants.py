@@ -7,7 +7,7 @@ from .enums import OutputFormat
 
 # ---------------- 应用信息 ----------------
 APP_NAME = "图片工具箱 (libvips)"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 
 # ---------------- 图片格式 ----------------
@@ -80,6 +80,11 @@ MIN_WORKERS, MAX_WORKERS = 2, 8
 # ---------------- 缓存 ----------------
 CACHE_FILE = Path.home() / ".image_toolkit_cache.json"
 CACHE_VERSION = 1
+
+# ---------------- 参数记忆 ----------------
+SETTINGS_FILE = Path.home() / ".image_toolkit_settings.json"
+SETTINGS_VERSION = 1
+MAX_PRESETS = 20
 
 # 临时文件后缀（写入完成后再原子替换目标文件）
 TMP_MARK = ".tmp"

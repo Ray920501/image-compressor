@@ -112,6 +112,7 @@ class TaskSettings:
 
     # 文件处理
     delete_original: bool = False       # 提交成功后删除源文件
+    backup_original: bool = True        # 覆盖/删除前把原图移入回收站（可还原）
     skip_policy: SkipPolicy = field(default_factory=SkipPolicy)
 
     # 批处理

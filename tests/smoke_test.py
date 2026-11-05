@@ -35,7 +35,7 @@ def make_images(root: str) -> None:
     small.jpegsave(os.path.join(sub, "nested.jpg"), Q=90)
 
 
-def run_gui() -> None:
+def run_gui(work: str, failures: list) -> None:
     import tkinter as tk
     from tkinter import messagebox
 
@@ -47,16 +47,13 @@ def run_gui() -> None:
     messagebox.showwarning = lambda *a, **k: None
     messagebox.showerror = lambda *a, **k: print("showerror:", a)
 
-    work = tempfile.mkdtemp(prefix="imgtool_gui_")
     src = os.path.join(work, "src")
     make_images(src)
 
     root = tk.Tk()
     root.withdraw()  # 不显示窗口，仅创建控件
-    app = ImageToolApp(root)
+    app = ImageToolApp(root, preferences_path=os.path.join(work, "prefs.json"))
     root.update()
-
-    failures = []
 
     def pump(label: str, timeout: float = 120.0) -> None:
         deadline = time.time() + timeout
@@ -131,18 +128,46 @@ def run_gui() -> None:
         if image.width != 3600:
             failures.append(f"放大尺寸错误：{image.width} != 3600")
 
-    shutil.rmtree(work, ignore_errors=True)
+    print("GUI 冒烟测试完成")
 
+
+def test_preferences(work: str) -> list:
+    """参数记忆/预设的读写往返。"""
+    from core import Preferences
+
+    failures = []
+    path = os.path.join(work, "prefs_test.json")
+    prefs = Preferences(path=path)
+    prefs.set_last({"mode": "convert", "compress": {"width": 1234, "format": "jpeg"}})
+    prefs.set_preset("测试预设", {"convert": {"format": "webp", "jpeg_quality": 77}})
+
+    reloaded = Preferences(path=path)
+    if reloaded.last.get("mode") != "convert":
+        failures.append("参数记忆：last 未正确恢复")
+    if (reloaded.get_preset("测试预设") or {}).get("convert", {}).get("format") != "webp":
+        failures.append("预设：未正确恢复")
+    if reloaded.preset_names != ["测试预设"]:
+        failures.append("预设：名称列表不正确")
+
+    reloaded.delete_preset("测试预设")
+    if Preferences(path=path).get_preset("测试预设") is not None:
+        failures.append("预设：删除后仍然存在")
+
+    print("[参数记忆] 通过" if not failures else "[参数记忆] 失败")
+    return failures
+
+
+def main() -> None:
+    work = tempfile.mkdtemp(prefix="imgtool_test_")
+    failures = test_preferences(work)
+    run_gui(work, failures)
+    shutil.rmtree(work, ignore_errors=True)
     if failures:
         print("\n失败项:")
         for item in failures:
             print(" -", item)
         raise SystemExit(1)
-    print("\nGUI 冒烟测试通过")
-
-
-def main() -> None:
-    run_gui()
+    print("\n全部测试通过")
 
 
 if __name__ == "__main__":

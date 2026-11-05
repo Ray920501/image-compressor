@@ -11,6 +11,7 @@ from .constants import (
 )
 from .enums import BatchMode, OperationMode, OutputFormat
 from .models import ImageResult, SkipPolicy, TaskSettings
+from .preferences import Preferences
 from .processor import (
     calculate_target_size,
     commit_results,
@@ -39,6 +40,7 @@ __all__ = [
     "ImageResult",
     "OperationMode",
     "OutputFormat",
+    "Preferences",
     "ProcessedCache",
     "SIZE_PRESETS",
     "SUPPORTED_EXTENSIONS",

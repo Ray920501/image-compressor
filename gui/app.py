@@ -19,7 +19,7 @@ from queue import Empty, Queue
 from typing import List, Optional
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
 from core import (
     APP_TITLE,
@@ -27,6 +27,7 @@ from core import (
     ImageResult,
     OperationMode,
     OutputFormat,
+    Preferences,
     ProcessedCache,
     SkipPolicy,
     TaskSettings,
@@ -61,14 +62,36 @@ _MODE_LABELS = {
 _LOG_LINE_LIMIT = 8000
 
 
+# ---------------- 参数记忆辅助 ----------------
+def _safe_int(data, key: str, default: int, minimum=None, maximum=None) -> int:
+    try:
+        value = int(data.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _safe_bool(data, key: str, default: bool) -> bool:
+    return bool(data.get(key, default))
+
+
+def _safe_choice(data, key: str, default: str, allowed) -> str:
+    value = data.get(key, default)
+    return value if value in allowed else default
+
+
 class ImageToolApp:
     """图片工具箱主窗口。"""
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, preferences_path: Optional[str] = None):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("1080x900")
-        self.root.minsize(960, 720)
+        self.root.geometry("1080x920")
+        self.root.minsize(960, 760)
 
         # ---------------- 状态 ----------------
         self.image_files: List[str] = []
@@ -87,17 +110,36 @@ class ImageToolApp:
 
         self.queue: Queue = Queue()
         self.cache = ProcessedCache()
+        self.prefs = Preferences(path=preferences_path) if preferences_path else Preferences()
         try:
             self.cache.load()
         except Exception:
             pass
+        self._default_state: dict = {}
+        self._restored_last = False
 
         self._build_style()
         self._build_widgets()
         self._bind_events()
+
+        # 记录一份“默认参数”，供“恢复默认”使用
+        self._default_state = self._collect_state()
+
+        # 恢复上次使用的参数
+        last_state = self.prefs.last
+        if last_state:
+            try:
+                self._apply_state(last_state)
+                self._restored_last = True
+            except Exception:
+                self._restored_last = False
+        self._refresh_preset_box()
+
         self._poll_queue()
 
         self._log(f"{APP_TITLE} 已就绪")
+        if self._restored_last:
+            self._log("已恢复上次使用的参数（可通过“参数预设”保存多套配置）")
         self._log("使用步骤：选择输入文件夹 → 选择模式与参数 → 开始处理")
 
     # =================================================================
@@ -168,6 +210,21 @@ class ImageToolApp:
         self.recursive_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(row_output, text="包含子文件夹",
                         variable=self.recursive_var).pack(side=tk.LEFT, padx=(8, 0))
+
+        row_preset = ttk.Frame(frame)
+        row_preset.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(row_preset, text="参数预设:").pack(side=tk.LEFT)
+        self.preset_var = tk.StringVar()
+        self.preset_box = ttk.Combobox(row_preset, textvariable=self.preset_var,
+                                       width=26, state="readonly", values=[])
+        self.preset_box.pack(side=tk.LEFT, padx=6)
+        self.preset_box.bind("<<ComboboxSelected>>", self._apply_selected_preset)
+        ttk.Button(row_preset, text="保存为预设...",
+                   command=self._save_preset_ui).pack(side=tk.LEFT)
+        ttk.Button(row_preset, text="删除",
+                   command=self._delete_preset_ui).pack(side=tk.LEFT, padx=4)
+        ttk.Button(row_preset, text="恢复默认",
+                   command=self._reset_defaults_ui).pack(side=tk.LEFT)
 
         ttk.Label(
             frame,
@@ -251,6 +308,10 @@ class ImageToolApp:
         self.save_stats_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row3, text="保存 JSON 统计",
                         variable=self.save_stats_var).pack(side=tk.LEFT, padx=(10, 0))
+
+        self.backup_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row3, text="覆盖前原图移入回收站",
+                        variable=self.backup_var).pack(side=tk.LEFT, padx=(10, 0))
 
     def _build_controls(self, parent) -> None:
         frame = ttk.Frame(parent)
@@ -405,10 +466,179 @@ class ImageToolApp:
             workers=int(self.workers_var.get()),
             use_cache=bool(self.use_cache_var.get()),
             save_statistics=bool(self.save_stats_var.get()),
+            backup_original=bool(self.backup_var.get()),
         )
 
         self._current_panel().apply(settings)
         return settings
+
+    # =================================================================
+    # 参数记忆 / 预设
+    # =================================================================
+    @staticmethod
+    def _int_value(variable, default: int) -> int:
+        try:
+            return int(variable.get())
+        except (tk.TclError, ValueError):
+            return default
+
+    def _collect_state(self) -> dict:
+        """把当前全部界面参数收集为可序列化的字典。"""
+        return {
+            "mode": self._current_mode().value,
+            "input_dir": self.input_dir_var.get(),
+            "output_dir": self.output_dir_var.get(),
+            "recursive": bool(self.recursive_var.get()),
+            "preserve": bool(self.preserve_var.get()),
+            "batch_mode": self.batch_mode_var.get(),
+            "batch_count": self._int_value(self.batch_count_var, DEFAULT_BATCH_COUNT),
+            "batch_size_mb": self._int_value(self.batch_size_var, DEFAULT_BATCH_SIZE_MB),
+            "skip_larger": bool(self.skip_larger_var.get()),
+            "skip_larger_kb": self._int_value(self.skip_larger_kb_var,
+                                              DEFAULT_SKIP_THRESHOLD_KB),
+            "skip_smaller": bool(self.skip_smaller_var.get()),
+            "skip_smaller_kb": self._int_value(self.skip_smaller_kb_var, 10),
+            "skip_recent": bool(self.skip_recent_var.get()),
+            "recent_hours": self._int_value(self.recent_hours_var, 1),
+            "skip_min_dim": bool(self.skip_min_dim_var.get()),
+            "min_width": self._int_value(self.min_width_var, 100),
+            "min_height": self._int_value(self.min_height_var, 100),
+            "use_cache": bool(self.use_cache_var.get()),
+            "save_stats": bool(self.save_stats_var.get()),
+            "workers": self._int_value(self.workers_var, 0),
+            "backup": bool(self.backup_var.get()),
+            "compress": self.compress_panel.state(),
+            "convert": self.convert_panel.state(),
+            "upscale": self.upscale_panel.state(),
+        }
+
+    def _apply_state(self, state: dict) -> None:
+        """应用参数字典（对缺失/非法值做保护）。"""
+        if not isinstance(state, dict):
+            return
+
+        for key, variable in (("input_dir", self.input_dir_var),
+                              ("output_dir", self.output_dir_var)):
+            value = state.get(key)
+            if isinstance(value, str):
+                variable.set(value)
+
+        self.recursive_var.set(_safe_bool(state, "recursive", True))
+        self.preserve_var.set(_safe_bool(state, "preserve", True))
+        self.batch_mode_var.set(_safe_choice(state, "batch_mode", "count",
+                                             {"count", "size"}))
+        self.batch_count_var.set(_safe_int(state, "batch_count",
+                                           DEFAULT_BATCH_COUNT, 1, 9999))
+        self.batch_size_var.set(_safe_int(state, "batch_size_mb",
+                                          DEFAULT_BATCH_SIZE_MB, 1, 99999))
+
+        self.skip_larger_var.set(_safe_bool(state, "skip_larger", False))
+        self.skip_larger_kb_var.set(_safe_int(state, "skip_larger_kb",
+                                              DEFAULT_SKIP_THRESHOLD_KB, 1, 999999))
+        self.skip_smaller_var.set(_safe_bool(state, "skip_smaller", False))
+        self.skip_smaller_kb_var.set(_safe_int(state, "skip_smaller_kb", 10, 1, 999999))
+        self.skip_recent_var.set(_safe_bool(state, "skip_recent", False))
+        self.recent_hours_var.set(_safe_int(state, "recent_hours", 1, 1, 720))
+        self.skip_min_dim_var.set(_safe_bool(state, "skip_min_dim", False))
+        self.min_width_var.set(_safe_int(state, "min_width", 100, 0, 20000))
+        self.min_height_var.set(_safe_int(state, "min_height", 100, 0, 20000))
+
+        self.use_cache_var.set(_safe_bool(state, "use_cache", True))
+        self.save_stats_var.set(_safe_bool(state, "save_stats", False))
+        self.workers_var.set(_safe_int(state, "workers", 0, 0, 32))
+        self.backup_var.set(_safe_bool(state, "backup", True))
+
+        for key, panel in (("compress", self.compress_panel),
+                           ("convert", self.convert_panel),
+                           ("upscale", self.upscale_panel)):
+            data = state.get(key)
+            if isinstance(data, dict):
+                try:
+                    panel.load_state(data)
+                except Exception:
+                    continue
+
+        try:
+            mode = OperationMode(state.get("mode", OperationMode.COMPRESS.value))
+            index = {OperationMode.COMPRESS: 0,
+                     OperationMode.CONVERT: 1,
+                     OperationMode.UPSCALE: 2}[mode]
+            self.notebook.select(index)
+        except Exception:
+            pass
+
+    def _save_preferences(self) -> None:
+        try:
+            self.prefs.set_last(self._collect_state())
+        except Exception:
+            pass
+
+    def _refresh_preset_box(self) -> None:
+        names = self.prefs.preset_names
+        self.preset_box.configure(values=names)
+        if self.preset_var.get() not in names:
+            self.preset_var.set("")
+
+    def _apply_selected_preset(self, _event=None) -> None:
+        name = self.preset_var.get().strip()
+        if not name:
+            return
+        state = self.prefs.get_preset(name)
+        if not state:
+            messagebox.showwarning("预设不存在", f"预设“{name}”已不存在。")
+            self._refresh_preset_box()
+            return
+        self._apply_state(state)
+        self.status_label.config(text=f"已应用预设：{name}")
+        self._log(f"已应用参数预设: {name}")
+
+    def _save_preset_ui(self) -> None:
+        name = simpledialog.askstring(
+            "保存预设", "请输入预设名称（例如：4K 归档 / 1080P 分享）：",
+            parent=self.root,
+        )
+        if not name or not name.strip():
+            return
+        name = name.strip()
+
+        if name in self.prefs.preset_names:
+            if not messagebox.askyesno("覆盖预设", f"预设“{name}”已存在，是否覆盖？"):
+                return
+
+        if self.prefs.set_preset(name, self._collect_state()):
+            self._refresh_preset_box()
+            self.preset_var.set(name)
+            self._log(f"已保存参数预设: {name}")
+            messagebox.showinfo("已保存", f"预设“{name}”已保存。")
+        else:
+            messagebox.showwarning("保存失败", "预设数量已达上限或名称无效。")
+
+    def _delete_preset_ui(self) -> None:
+        name = self.preset_var.get().strip()
+        if not name:
+            messagebox.showinfo("提示", "请先在下拉框中选择要删除的预设。")
+            return
+        if not messagebox.askyesno("删除预设", f"确定删除预设“{name}”吗？"):
+            return
+        self.prefs.delete_preset(name)
+        self._refresh_preset_box()
+        self._log(f"已删除参数预设: {name}")
+
+    def _reset_defaults_ui(self) -> None:
+        if not messagebox.askyesno(
+            "恢复默认",
+            "将三个模式的参数恢复为默认值（输入/输出文件夹保留）。\n继续吗？",
+        ):
+            return
+        state = {
+            key: (dict(value) if isinstance(value, dict) else value)
+            for key, value in self._default_state.items()
+        }
+        state["input_dir"] = self.input_dir_var.get()
+        state["output_dir"] = self.output_dir_var.get()
+        self._apply_state(state)
+        self.preset_var.set("")
+        self._log("已恢复默认参数")
 
     def _start(self) -> None:
         if self.is_processing:
@@ -450,6 +680,9 @@ class ImageToolApp:
             ):
                 return
             self._overwrite_confirmed = True
+
+        # 记住本次参数，下次启动自动恢复
+        self._save_preferences()
 
         self.is_processing = True
         self.cancel_event.clear()
@@ -681,7 +914,8 @@ class ImageToolApp:
         if not cancelled and results:
             self._emit("status", "正在提交文件...")
             committed, commit_failed = commit_results(
-                results, log=lambda message: self._emit("log", message))
+                results, log=lambda message: self._emit("log", message),
+                backup=settings.backup_original)
 
         # ---------- 5. 更新缓存 ----------
         if not cancelled and settings.use_cache:
@@ -1012,4 +1246,5 @@ class ImageToolApp:
                 return
             self.cancel_event.set()
             self.running_event.set()
+        self._save_preferences()
         self.root.destroy()

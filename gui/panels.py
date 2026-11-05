@@ -5,6 +5,7 @@
 主窗口负责扫描、批处理、日志与提交。
 """
 
+import re
 import tkinter as tk
 from tkinter import colorchooser, ttk
 
@@ -19,6 +20,64 @@ from core.constants import (
 )
 from core.enums import OutputFormat
 from core.models import TaskSettings
+
+
+# ---------------- 状态读写辅助（用于参数记忆/预设） ----------------
+def _var_int(variable, default: int) -> int:
+    try:
+        return int(variable.get())
+    except (tk.TclError, ValueError):
+        return default
+
+
+def _var_float(variable, default: float) -> float:
+    try:
+        return float(variable.get())
+    except (tk.TclError, ValueError):
+        return default
+
+
+def _safe_int(data, key: str, default: int,
+              minimum=None, maximum=None) -> int:
+    try:
+        value = int(data.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _safe_float(data, key: str, default: float,
+                minimum=None, maximum=None) -> float:
+    try:
+        value = float(data.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _safe_bool(data, key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    return bool(value)
+
+
+def _safe_choice(data, key: str, default: str, allowed) -> str:
+    value = data.get(key, default)
+    return value if value in allowed else default
+
+
+def _safe_color(data, key: str, default: str) -> str:
+    value = data.get(key, default)
+    if isinstance(value, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", value.strip()):
+        return value.strip().upper()
+    return default
 
 
 class BasePanel(ttk.Frame):
@@ -42,6 +101,14 @@ class BasePanel(ttk.Frame):
     def validate(self):
         """返回 (是否通过, 错误提示)。"""
         return True, ""
+
+    def state(self) -> dict:
+        """导出界面状态（用于参数记忆/预设）。"""
+        return {}
+
+    def load_state(self, data: dict) -> None:
+        """从参数记忆/预设恢复界面状态。"""
+        return
 
     # ---------- 控件辅助 ----------
     def _check(self, parent, text, variable, row, column=0, columnspan=1, padx=0):
@@ -176,6 +243,9 @@ class CompressPanel(BasePanel):
     def _on_size_edited(self, *_args) -> None:
         if self._applying_preset:
             return
+        self._sync_preset_label()
+
+    def _sync_preset_label(self) -> None:
         try:
             current = (self.width_var.get(), self.height_var.get())
         except tk.TclError:
@@ -222,6 +292,47 @@ class CompressPanel(BasePanel):
         except (tk.TclError, ValueError):
             return False, "尺寸或质量参数不是有效数字"
         return True, ""
+
+    # ---------- 参数记忆 ----------
+    def state(self) -> dict:
+        return {
+            "width": _var_int(self.width_var, 3840),
+            "height": _var_int(self.height_var, 2160),
+            "jpeg_quality": _var_int(self.jpeg_var, DEFAULT_JPEG_QUALITY),
+            "png_compression": _var_int(self.png_var, DEFAULT_PNG_COMPRESSION),
+            "webp_quality": _var_int(self.webp_var, DEFAULT_WEBP_QUALITY),
+            "format": self.format_var.get(),
+            "adaptive": bool(self.adaptive_var.get()),
+            "reencode": bool(self.reencode_var.get()),
+            "keep_larger": bool(self.keep_larger_var.get()),
+            "strip": bool(self.strip_var.get()),
+            "background": self.bg_var.get(),
+            "delete_original": bool(self.delete_var.get()),
+        }
+
+    def load_state(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            return
+        self._applying_preset = True
+        try:
+            self.width_var.set(_safe_int(data, "width", 3840, 0, 20000))
+            self.height_var.set(_safe_int(data, "height", 2160, 0, 20000))
+            self.jpeg_var.set(_safe_int(data, "jpeg_quality", DEFAULT_JPEG_QUALITY, 1, 100))
+            self.png_var.set(_safe_int(data, "png_compression", DEFAULT_PNG_COMPRESSION, 0, 9))
+            self.webp_var.set(_safe_int(data, "webp_quality", DEFAULT_WEBP_QUALITY, 1, 100))
+            self.format_var.set(_safe_choice(
+                data, "format", OutputFormat.KEEP.value,
+                {fmt.value for fmt in OutputFormat},
+            ))
+            self.adaptive_var.set(_safe_bool(data, "adaptive", False))
+            self.reencode_var.set(_safe_bool(data, "reencode", True))
+            self.keep_larger_var.set(_safe_bool(data, "keep_larger", False))
+            self.strip_var.set(_safe_bool(data, "strip", True))
+            self.bg_var.set(_safe_color(data, "background", DEFAULT_BACKGROUND))
+            self.delete_var.set(_safe_bool(data, "delete_original", False))
+        finally:
+            self._applying_preset = False
+        self._sync_preset_label()
 
 
 class ConvertPanel(BasePanel):
@@ -308,6 +419,32 @@ class ConvertPanel(BasePanel):
             return False, "质量参数不是有效数字"
         return True, ""
 
+    # ---------- 参数记忆 ----------
+    def state(self) -> dict:
+        return {
+            "format": self.format_var.get(),
+            "jpeg_quality": _var_int(self.jpeg_var, DEFAULT_JPEG_QUALITY),
+            "webp_quality": _var_int(self.webp_var, DEFAULT_WEBP_QUALITY),
+            "png_compression": _var_int(self.png_var, DEFAULT_PNG_COMPRESSION),
+            "background": self.bg_var.get(),
+            "delete_original": bool(self.delete_var.get()),
+            "strip": bool(self.strip_var.get()),
+        }
+
+    def load_state(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            return
+        self.format_var.set(_safe_choice(
+            data, "format", OutputFormat.JPEG.value,
+            {OutputFormat.JPEG.value, OutputFormat.PNG.value, OutputFormat.WEBP.value},
+        ))
+        self.jpeg_var.set(_safe_int(data, "jpeg_quality", DEFAULT_JPEG_QUALITY, 1, 100))
+        self.webp_var.set(_safe_int(data, "webp_quality", DEFAULT_WEBP_QUALITY, 1, 100))
+        self.png_var.set(_safe_int(data, "png_compression", DEFAULT_PNG_COMPRESSION, 0, 9))
+        self.bg_var.set(_safe_color(data, "background", DEFAULT_BACKGROUND))
+        self.delete_var.set(_safe_bool(data, "delete_original", False))
+        self.strip_var.set(_safe_bool(data, "strip", True))
+
 
 class UpscalePanel(BasePanel):
     """高清放大模式：移植自 DS放大.py、放大.py。"""
@@ -372,3 +509,20 @@ class UpscalePanel(BasePanel):
         except (tk.TclError, ValueError):
             return False, "放大参数不是有效数字"
         return True, ""
+
+    # ---------- 参数记忆 ----------
+    def state(self) -> dict:
+        return {
+            "factor": _var_float(self.factor_var, DEFAULT_UPSCALE_FACTOR),
+            "sharpen": _var_float(self.sharpen_var, DEFAULT_SHARPEN_SIGMA),
+            "delete_original": bool(self.delete_var.get()),
+            "strip": bool(self.strip_var.get()),
+        }
+
+    def load_state(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            return
+        self.factor_var.set(_safe_float(data, "factor", DEFAULT_UPSCALE_FACTOR, 1.0, 4.0))
+        self.sharpen_var.set(_safe_float(data, "sharpen", DEFAULT_SHARPEN_SIGMA, 0.0, 3.0))
+        self.delete_var.set(_safe_bool(data, "delete_original", False))
+        self.strip_var.set(_safe_bool(data, "strip", True))

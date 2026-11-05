@@ -36,6 +36,7 @@ try:
 except Exception:
     pass
 
+from . import backup as backup_module
 from .constants import (
     ADAPTIVE_BASE_QUALITY,
     ADAPTIVE_LARGE_PIXELS,
@@ -568,8 +569,12 @@ def _remove_with_retry(path: str, attempts: int = 3) -> bool:
     return False
 
 
-def commit_results(results, log=None) -> Tuple[int, int]:
-    """提交处理结果：删除原文件（按需）并把临时文件原子替换到目标路径。
+def commit_results(results, log=None, backup: bool = False) -> Tuple[int, int]:
+    """提交处理结果：按需删除/备份原文件，并把临时文件原子替换到目标路径。
+
+    backup=True 时，在覆盖原图或删除源文件之前，先把原图移入回收站
+    （网络盘/回收站不可用时复制到同目录 .originals）；备份失败则放弃该文件，
+    避免原图在没有备份的情况下消失。
 
     返回 (成功数, 失败数)。失败时临时文件会保留，便于手动恢复。
     """
@@ -582,6 +587,7 @@ def commit_results(results, log=None) -> Tuple[int, int]:
 
         tmp_path = result.tmp_path
         target_path = result.target_path
+        source_path = result.file_path
 
         if not os.path.exists(tmp_path):
             failed += 1
@@ -602,12 +608,22 @@ def commit_results(results, log=None) -> Tuple[int, int]:
         except OSError:
             pass
 
-        # 需要删除源文件（格式变化 / 输出到其他目录）
-        if result.need_delete:
-            if not _remove_with_retry(result.file_path):
+        same_path = os.path.normcase(os.path.abspath(target_path)) == os.path.normcase(
+            os.path.abspath(source_path)
+        )
+
+        # ---------- 备份原图 ----------
+        if backup and (result.need_delete or same_path) and os.path.exists(source_path):
+            if not backup_module.backup_original(source_path, log=log):
+                failed += 1
+                continue
+
+        # ---------- 需要删除源文件（格式变化 / 输出到其他目录）----------
+        if result.need_delete and os.path.exists(source_path):
+            if not _remove_with_retry(source_path):
                 failed += 1
                 if log:
-                    log(f"⚠️ {os.path.basename(result.file_path)}: 原文件删除失败，临时文件已保留")
+                    log(f"⚠️ {os.path.basename(source_path)}: 原文件删除失败，临时文件已保留")
                 continue
 
         moved = False
