@@ -77,18 +77,70 @@ def _read_image(path: str) -> pyvips.Image:
     raise last_error if last_error else RuntimeError("无法读取图片")
 
 
-def _heic_to_temp(heic_path: str) -> str:
-    """用 FFmpeg 把 HEIC 解码为临时 PNG（libvips 缺少 HEVC 解码器时的兜底）。"""
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise RuntimeError("无法解码 HEIC：当前 libvips 缺少 HEVC 支持，且系统中未找到 ffmpeg")
+_PILLOW_HEIF_STATE = None
 
+
+def _pillow_heif_ready() -> bool:
+    """可选依赖 pillow-heif：能完整解码 HEIC 的主图（含网格拼接）。"""
+    global _PILLOW_HEIF_STATE
+    if _PILLOW_HEIF_STATE is None:
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+            _PILLOW_HEIF_STATE = True
+        except Exception:
+            _PILLOW_HEIF_STATE = False
+    return bool(_PILLOW_HEIF_STATE)
+
+
+def _heic_with_pillow(heic_path: str, tmp_path: str) -> bool:
+    """用 pillow-heif 解码为临时 PNG；不可用或失败时返回 False。"""
+    if not _pillow_heif_ready():
+        return False
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(heic_path) as image:
+            image = ImageOps.exif_transpose(image)
+            if image.mode not in ("RGB", "RGBA", "L", "LA"):
+                has_alpha = "A" in image.getbands()
+                image = image.convert("RGBA" if has_alpha else "RGB")
+            image.save(tmp_path, format="PNG", optimize=False)
+        return os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        return False
+
+
+def _heic_to_temp(heic_path: str) -> str:
+    """把 HEIC 解码为临时 PNG。
+
+    优先使用 pillow-heif（libheif + libde265，能正确处理网格 HEIC 的主图）；
+    没有安装时退回 FFmpeg，并校验其输出是否为完整分辨率，避免只取到缩略图/分块。
+    """
     fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="heic_")
     os.close(fd)
     try:
         os.remove(tmp_path)
     except OSError:
         pass
+
+    # ---------- 1. pillow-heif ----------
+    if _heic_with_pillow(heic_path, tmp_path):
+        return tmp_path
+
+    # ---------- 2. FFmpeg 兜底 ----------
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "无法解码 HEIC：当前 libvips 缺少 HEVC 解码器，"
+            "且未安装 pillow-heif 或 ffmpeg。请执行 pip install pillow-heif"
+        )
 
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     cmd = [
@@ -114,14 +166,46 @@ def _heic_to_temp(heic_path: str) -> str:
 
     if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
         raise RuntimeError("FFmpeg 未生成有效的 HEIC 解码结果")
+
+    # 网格 HEIC 中 FFmpeg 可能只解出一个分块/缩略图，必须校验完整尺寸
+    try:
+        expected = _read_image(heic_path)
+        actual = _read_image(tmp_path)
+        expected_area = expected.width * expected.height
+        actual_area = actual.width * actual.height
+        if expected_area > 0 and actual_area < expected_area * 0.9:
+            raise RuntimeError(
+                f"FFmpeg 只解码出 {actual.width}×{actual.height}，"
+                f"而主图应为 {expected.width}×{expected.height}（可能是网格/缩略图）。"
+                "请安装 pillow-heif：pip install pillow-heif"
+            )
+    except RuntimeError:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    except Exception:
+        pass
+
     return tmp_path
+
+
+def _force_decode(image_path: str) -> None:
+    """强制真正解码一次，用于提前发现“能读头但解不了像素”的格式。
+
+    libvips 的 HEIF 读取器在没有 HEVC 解码插件时仍能读出宽高（懒加载），
+    直到保存时才报错。这里用 avg() 触发一次完整解码，把问题提前到加载阶段。
+    """
+    image = _read_image(image_path)
+    image.avg()
 
 
 def load_image(image_path: str) -> Tuple[pyvips.Image, Optional[str]]:
     """读取图片，返回 (图像, 需要清理的临时文件路径或 None)。"""
     src_ext = os.path.splitext(image_path)[1].lower()
     if src_ext in HEIC_EXTENSIONS:
+        # 先验证 libvips 是否真的能解码 HEVC；不能则用 FFmpeg 解码成临时 PNG。
         try:
+            _force_decode(image_path)
             return _read_image(image_path), None
         except Exception:
             decoded = _heic_to_temp(image_path)

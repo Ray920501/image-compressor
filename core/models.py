@@ -89,7 +89,7 @@ class TaskSettings:
     # 压缩 / 缩放
     max_width: int = 3840
     max_height: int = 2160
-    output_format: OutputFormat = OutputFormat.KEEP
+    output_format: OutputFormat = OutputFormat.SMART
     reencode_always: bool = True     # 尺寸/格式未变化时仍然重新编码（压缩工具默认行为）
     keep_original_if_larger: bool = False  # 结果比原图大时放弃写入，保留原图
 

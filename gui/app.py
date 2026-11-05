@@ -52,6 +52,7 @@ from core.constants import (
 from core.utils import cleanup_orphan_temps, open_folder
 
 from .panels import CompressPanel, ConvertPanel, UpscalePanel
+from .presets import BUILTIN_PRESETS
 
 _MODE_LABELS = {
     OperationMode.COMPRESS: "压缩 / 缩放",
@@ -111,6 +112,10 @@ class ImageToolApp:
         self.queue: Queue = Queue()
         self.cache = ProcessedCache()
         self.prefs = Preferences(path=preferences_path) if preferences_path else Preferences()
+        try:
+            self.prefs.seed_presets(BUILTIN_PRESETS)
+        except Exception:
+            pass
         try:
             self.cache.load()
         except Exception:

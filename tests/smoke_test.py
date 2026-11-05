@@ -55,6 +55,21 @@ def run_gui(work: str, failures: list) -> None:
     app = ImageToolApp(root, preferences_path=os.path.join(work, "prefs.json"))
     root.update()
 
+    # 默认输出格式应为“智能选择”，并且内置预设已写入
+    if app.compress_panel.format_var.get() != "smart":
+        failures.append(f"默认输出格式不是 smart：{app.compress_panel.format_var.get()}")
+    for name in ("归档 4K", "分享 2K", "社交 1080p"):
+        if name not in app.prefs.preset_names:
+            failures.append(f"缺少内置预设：{name}")
+
+    app._refresh_preset_box()
+    app.preset_var.set("分享 2K")
+    app._apply_selected_preset()
+    if app.compress_panel.width_var.get() != 2560 or \
+            app.compress_panel.format_var.get() != "jpeg" or \
+            not app.compress_panel.adaptive_var.get():
+        failures.append("应用“分享 2K”预设未生效")
+
     def pump(label: str, timeout: float = 120.0) -> None:
         deadline = time.time() + timeout
         while app.is_processing and time.time() < deadline:
@@ -132,8 +147,9 @@ def run_gui(work: str, failures: list) -> None:
 
 
 def test_preferences(work: str) -> list:
-    """参数记忆/预设的读写往返。"""
+    """参数记忆/预设/内置预设的读写往返。"""
     from core import Preferences
+    from gui.presets import BUILTIN_PRESETS
 
     failures = []
     path = os.path.join(work, "prefs_test.json")
@@ -146,14 +162,34 @@ def test_preferences(work: str) -> list:
         failures.append("参数记忆：last 未正确恢复")
     if (reloaded.get_preset("测试预设") or {}).get("convert", {}).get("format") != "webp":
         failures.append("预设：未正确恢复")
-    if reloaded.preset_names != ["测试预设"]:
+    if "测试预设" not in reloaded.preset_names:
         failures.append("预设：名称列表不正确")
 
     reloaded.delete_preset("测试预设")
     if Preferences(path=path).get_preset("测试预设") is not None:
         failures.append("预设：删除后仍然存在")
 
-    print("[参数记忆] 通过" if not failures else "[参数记忆] 失败")
+    # 内置预设：首次写入、幂等、删除后不再自动加回
+    seed_path = os.path.join(work, "prefs_seed.json")
+    seeded = Preferences(path=seed_path)
+    added = seeded.seed_presets(BUILTIN_PRESETS)
+    if added != len(BUILTIN_PRESETS):
+        failures.append(f"内置预设：新增数量 {added} != {len(BUILTIN_PRESETS)}")
+    if set(seeded.preset_names) != set(BUILTIN_PRESETS):
+        failures.append("内置预设：名称不完整")
+    if seeded.seed_presets(BUILTIN_PRESETS) != 0:
+        failures.append("内置预设：重复填充")
+
+    share = (seeded.get_preset("分享 2K") or {}).get("compress", {})
+    if share.get("width") != 2560 or share.get("format") != "jpeg":
+        failures.append("内置预设：分享 2K 内容不正确")
+
+    seeded.delete_preset("归档 4K")
+    seeded.seed_presets(BUILTIN_PRESETS)
+    if "归档 4K" in Preferences(path=seed_path).preset_names:
+        failures.append("内置预设：删除后又被自动加回")
+
+    print("[参数记忆/预设] 通过" if not failures else "[参数记忆/预设] 失败")
     return failures
 
 

@@ -25,6 +25,7 @@ class Preferences:
         self.path = Path(path) if path else Path(SETTINGS_FILE)
         self._last: Dict = {}
         self._presets: Dict[str, Dict] = {}
+        self._seeded = False
         self.load()
 
     # ---------- 读写 ----------
@@ -52,10 +53,13 @@ class Preferences:
                     cleaned[name] = state
             self._presets = cleaned
 
+        self._seeded = bool(payload.get("seeded", False))
+
     def save(self) -> bool:
         try:
             payload = {
                 "version": SETTINGS_VERSION,
+                "seeded": self._seeded,
                 "last": self._last,
                 "presets": self._presets,
             }
@@ -102,3 +106,23 @@ class Preferences:
             self.save()
             return True
         return False
+
+    # ---------- 内置预设 ----------
+    def seed_presets(self, defaults: Dict[str, Dict]) -> int:
+        """首次运行时写入内置预设；不覆盖用户已有同名预设。
+
+        只会执行一次（``seeded`` 标记），因此用户删掉某个内置预设后，
+        下次启动不会再被自动加回来。
+        返回新增数量。
+        """
+        if self._seeded:
+            return 0
+
+        added = 0
+        for name, state in defaults.items():
+            if name not in self._presets:
+                self._presets[name] = deepcopy(state)
+                added += 1
+        self._seeded = True
+        self.save()
+        return added

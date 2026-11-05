@@ -183,7 +183,7 @@ class CompressPanel(BasePanel):
         format_frame = ttk.Frame(root)
         format_frame.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(0, 6))
         ttk.Label(format_frame, text="输出格式:").pack(side=tk.LEFT)
-        self.format_var = tk.StringVar(value=OutputFormat.KEEP.value)
+        self.format_var = tk.StringVar(value=OutputFormat.SMART.value)
         for text, value in (
             ("保留原格式", OutputFormat.KEEP.value),
             ("JPEG", OutputFormat.JPEG.value),
@@ -321,7 +321,7 @@ class CompressPanel(BasePanel):
             self.png_var.set(_safe_int(data, "png_compression", DEFAULT_PNG_COMPRESSION, 0, 9))
             self.webp_var.set(_safe_int(data, "webp_quality", DEFAULT_WEBP_QUALITY, 1, 100))
             self.format_var.set(_safe_choice(
-                data, "format", OutputFormat.KEEP.value,
+                data, "format", OutputFormat.SMART.value,
                 {fmt.value for fmt in OutputFormat},
             ))
             self.adaptive_var.set(_safe_bool(data, "adaptive", False))
