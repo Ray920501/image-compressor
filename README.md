@@ -1,5 +1,7 @@
 # 图片工具箱（libvips）
 
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 A batch image toolkit for Windows: compress, convert and upscale photos fast using
 [libvips](https://www.libvips.org/), with a Tkinter GUI.
 
@@ -112,3 +114,9 @@ python tests\smoke_test.py
 ## 说明
 
 本仓库由作者本机使用的多个图片处理脚本合并而来，界面与文档为中文。
+
+## 许可证
+
+[MIT License](LICENSE) © 2026 Ray920501
+
+可自由使用、修改、分发和商用，仅需保留版权与许可声明。软件按“现状”提供，不附带任何担保。
