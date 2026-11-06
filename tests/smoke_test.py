@@ -58,7 +58,7 @@ def run_gui(work: str, failures: list) -> None:
     # 默认输出格式应为“智能选择”，并且内置预设已写入
     if app.compress_panel.format_var.get() != "smart":
         failures.append(f"默认输出格式不是 smart：{app.compress_panel.format_var.get()}")
-    for name in ("归档 4K", "分享 2K", "社交 1080p"):
+    for name in ("归档 4K", "分享 2K", "社交 1080p", "省空间 4K（SMART）"):
         if name not in app.prefs.preset_names:
             failures.append(f"缺少内置预设：{name}")
 
@@ -69,6 +69,20 @@ def run_gui(work: str, failures: list) -> None:
             app.compress_panel.format_var.get() != "jpeg" or \
             not app.compress_panel.adaptive_var.get():
         failures.append("应用“分享 2K”预设未生效")
+
+    app.preset_var.set("归档 4K")
+    app._apply_selected_preset()
+    if app.compress_panel.format_var.get() != "jpeg":
+        failures.append("应用“归档 4K”预设后不是 JPEG")
+
+    # 恢复默认参数后，目录仍需保留
+    app.input_dir_var.set(r"D:\保留输入")
+    app.output_dir_var.set(r"D:\保留输出")
+    app._reset_defaults_ui()
+    if app.input_dir_var.get() != r"D:\保留输入" or app.output_dir_var.get() != r"D:\保留输出":
+        failures.append("恢复默认参数时不应清空目录")
+
+    app.input_dir_var.set(src)
 
     def pump(label: str, timeout: float = 120.0) -> None:
         deadline = time.time() + timeout
@@ -127,7 +141,7 @@ def run_gui(work: str, failures: list) -> None:
     app.upscale_panel.sharpen_var.set(0.8)
     start_and_check("放大", out_upscale)
 
-    root.destroy()
+    app._on_close()
 
     # 校验输出尺寸
     sample = os.path.join(out_compress, "big.jpg")
@@ -184,6 +198,14 @@ def test_preferences(work: str) -> list:
     if share.get("width") != 2560 or share.get("format") != "jpeg":
         failures.append("内置预设：分享 2K 内容不正确")
 
+    archive = (seeded.get_preset("归档 4K") or {}).get("compress", {})
+    if archive.get("format") != "jpeg":
+        failures.append("内置预设：归档 4K 应为 JPEG")
+
+    space = (seeded.get_preset("省空间 4K（SMART）") or {}).get("compress", {})
+    if space.get("format") != "smart":
+        failures.append("内置预设：省空间 4K 应为 SMART")
+
     seeded.delete_preset("归档 4K")
     seeded.seed_presets(BUILTIN_PRESETS)
     if "归档 4K" in Preferences(path=seed_path).preset_names:
@@ -193,10 +215,44 @@ def test_preferences(work: str) -> list:
     return failures
 
 
+def test_paths_not_restored(work: str) -> list:
+    """输入/输出文件夹不应从上次参数中恢复。"""
+    import tkinter as tk
+
+    from core import Preferences
+    from gui.app import ImageToolApp
+
+    failures = []
+    path = os.path.join(work, "prefs_paths.json")
+    prefs = Preferences(path=path)
+    prefs.set_last({
+        "input_dir": r"D:\旧输入目录",
+        "output_dir": r"D:\旧输出目录",
+        "compress": {"format": "smart"},
+    })
+
+    root = tk.Tk()
+    root.withdraw()
+    app = ImageToolApp(root, preferences_path=path)
+    root.update()
+
+    if app.input_dir_var.get() != "":
+        failures.append("启动时不应恢复输入目录")
+    if app.output_dir_var.get() != "":
+        failures.append("启动时不应恢复输出目录")
+    if app.compress_panel.format_var.get() != "smart":
+        failures.append("除路径外的参数应正常恢复")
+
+    app._on_close()
+    print("[目录不记忆] 通过" if not failures else "[目录不记忆] 失败")
+    return failures
+
+
 def main() -> None:
     work = tempfile.mkdtemp(prefix="imgtool_test_")
     failures = test_preferences(work)
     run_gui(work, failures)
+    failures += test_paths_not_restored(work)
     shutil.rmtree(work, ignore_errors=True)
     if failures:
         print("\n失败项:")

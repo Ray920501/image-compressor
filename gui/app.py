@@ -110,6 +110,7 @@ class ImageToolApp:
         self._overwrite_confirmed = False
 
         self.queue: Queue = Queue()
+        self._poll_after_id = None
         self.cache = ProcessedCache()
         self.prefs = Preferences(path=preferences_path) if preferences_path else Preferences()
         try:
@@ -140,7 +141,7 @@ class ImageToolApp:
                 self._restored_last = False
         self._refresh_preset_box()
 
-        self._poll_queue()
+        self._poll_after_id = self.root.after(100, self._poll_queue)
 
         self._log(f"{APP_TITLE} 已就绪")
         if self._restored_last:
@@ -233,7 +234,8 @@ class ImageToolApp:
 
         ttk.Label(
             frame,
-            text="输出留空时：压缩覆盖原图 / 放大写入“输入目录\\高清放大输出” / 转换写入原图同目录",
+            text="输入/输出文件夹不会记忆，每次启动请重新选择；"
+                 "输出留空时：压缩覆盖原图 / 放大写入“输入目录\\高清放大输出” / 转换写入原图同目录",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(2, 0))
 
@@ -488,11 +490,12 @@ class ImageToolApp:
             return default
 
     def _collect_state(self) -> dict:
-        """把当前全部界面参数收集为可序列化的字典。"""
+        """把当前全部界面参数收集为可序列化的字典。
+
+        输入/输出文件夹不写入参数记忆；每次启动由用户重新选择。
+        """
         return {
             "mode": self._current_mode().value,
-            "input_dir": self.input_dir_var.get(),
-            "output_dir": self.output_dir_var.get(),
             "recursive": bool(self.recursive_var.get()),
             "preserve": bool(self.preserve_var.get()),
             "batch_mode": self.batch_mode_var.get(),
@@ -518,15 +521,12 @@ class ImageToolApp:
         }
 
     def _apply_state(self, state: dict) -> None:
-        """应用参数字典（对缺失/非法值做保护）。"""
+        """应用参数字典（对缺失/非法值做保护）。
+
+        旧版本保存过的 input_dir/output_dir 会被忽略，避免自动带入上次路径。
+        """
         if not isinstance(state, dict):
             return
-
-        for key, variable in (("input_dir", self.input_dir_var),
-                              ("output_dir", self.output_dir_var)):
-            value = state.get(key)
-            if isinstance(value, str):
-                variable.set(value)
 
         self.recursive_var.set(_safe_bool(state, "recursive", True))
         self.preserve_var.set(_safe_bool(state, "preserve", True))
@@ -639,8 +639,6 @@ class ImageToolApp:
             key: (dict(value) if isinstance(value, dict) else value)
             for key, value in self._default_state.items()
         }
-        state["input_dir"] = self.input_dir_var.get()
-        state["output_dir"] = self.output_dir_var.get()
         self._apply_state(state)
         self.preset_var.set("")
         self._log("已恢复默认参数")
@@ -1031,7 +1029,7 @@ class ImageToolApp:
             elif kind == "done":
                 self._on_done(payload[0])
 
-        self.root.after(100, self._poll_queue)
+        self._poll_after_id = self.root.after(100, self._poll_queue)
 
     def _handle_result(self, result: ImageResult) -> None:
         if result.skipped:
@@ -1251,5 +1249,11 @@ class ImageToolApp:
                 return
             self.cancel_event.set()
             self.running_event.set()
+        if self._poll_after_id is not None:
+            try:
+                self.root.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+            self._poll_after_id = None
         self._save_preferences()
         self.root.destroy()

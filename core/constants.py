@@ -7,7 +7,7 @@ from .enums import OutputFormat
 
 # ---------------- 应用信息 ----------------
 APP_NAME = "图片工具箱 (libvips)"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 
 # ---------------- 图片格式 ----------------

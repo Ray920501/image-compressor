@@ -1,10 +1,11 @@
 # gui/presets.py
 """内置参数预设（首次启动自动写入，之后可自行修改/删除）。
 
-三套预设对应真实照片验收报告中的推荐：
-  * 归档 4K    —— 保留原格式、固定 Q85，适合长期保存；
-  * 分享 2K    —— 转 JPEG、自适应质量，兼容性最好；
-  * 社交 1080p —— 转 JPEG、自适应质量，体积最小。
+预设对应真实照片验收报告中的推荐：
+  * 归档 4K         —— JPEG、固定 Q85，兼容性最好，适合长期保存；
+  * 分享 2K         —— JPEG、自适应质量，清晰度与体积平衡；
+  * 社交 1080p      —— JPEG、自适应质量，体积最小；
+  * 省空间 4K（SMART）—— 智能选择（JPG→WebP/HEIC→JPEG），体积最小，适合网盘/网页。
 
 预设只覆盖参数，不改动输入/输出文件夹。
 """
@@ -75,7 +76,7 @@ BUILTIN_PRESETS = {
     "归档 4K": _full_state(_compress_state(
         width=3840,
         height=2160,
-        format=OutputFormat.KEEP.value,
+        format=OutputFormat.JPEG.value,
         adaptive=False,
         keep_larger=True,
     )),
@@ -91,6 +92,13 @@ BUILTIN_PRESETS = {
         height=1080,
         format=OutputFormat.JPEG.value,
         adaptive=True,
+        keep_larger=True,
+    )),
+    "省空间 4K（SMART）": _full_state(_compress_state(
+        width=3840,
+        height=2160,
+        format=OutputFormat.SMART.value,
+        adaptive=False,
         keep_larger=True,
     )),
 }
